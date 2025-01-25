@@ -1,32 +1,86 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useContext } from "react";
 import { useRouter } from "next/router";
 import { supabase } from "../../../utils/supabase/server";
+import { NearContext } from "@/context";
 
 export default function VehicleDetails({ vehicle }) {
   const router = useRouter();
   const { id } = router.query;
+  const { signedAccountId } = useContext(NearContext);
 
   const [maintenanceRecords, setMaintenanceRecords] = useState([]);
   const [serviceDescription, setServiceDescription] = useState("");
+  const [verifiedAuthorId, setVerifiedAuthorId] = useState(null);
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
     if (vehicle) {
       fetchMaintenanceRecords();
     }
-  }, [vehicle]);
+    if (signedAccountId) {
+      fetchVerifiedAuthor();
+    }
+  }, [vehicle, signedAccountId]);
 
-  // Fetch maintenance records for the vehicle
+  const fetchVerifiedAuthor = async () => {
+    try {
+      const { data, error } = await supabase
+        .from("verified_authors")
+        .select("*")
+        .eq("account_name", signedAccountId || null) // Handle case when user is not signed in
+        .single();
+
+      if (error) {
+        if (error.code === "406") {
+          // Handle case where account is not verified
+          console.warn(
+            `No verified author found for account: ${signedAccountId}`
+          );
+          setVerifiedAuthorId(null);
+        } else {
+          // Handle other errors (e.g., network issues)
+          console.error("Unexpected error fetching verified author:", error);
+          setVerifiedAuthorId(null);
+        }
+        return;
+      }
+
+      if (data) {
+        console.log(`Found author: ${data.id}, ${data.email}`);
+        setVerifiedAuthorId(data.id || null); // Set author_id or null if undefined
+      } else {
+        // No data returned, handle gracefully
+        console.warn(`No data returned for account: ${signedAccountId}`);
+        setVerifiedAuthorId(null);
+      }
+    } catch (error) {
+      // Catch unexpected errors
+      console.error("Error fetching verified author:", error);
+      setVerifiedAuthorId(null);
+    }
+  };
+
+  // join the maintenance_records table with the verified_authors table when querying the data,
+  // Supabase automatically performs the join between maintenance_records and verified_authors because
+  // foreign key relationship (author_id in maintenance_records referencing id in verified_authors).
   const fetchMaintenanceRecords = async () => {
     try {
       const { data, error } = await supabase
         .from("maintenance_records")
-        .select("*")
-        .eq("vehicle_id", id)
-        .order("created_at", { ascending: false });
+        .select(
+          `
+          *,
+          verified_authors (
+            account_name
+          )
+        `
+        )
+        .eq("vehicle_id", id) // Filter by vehicle ID
+        .order("created_at", { ascending: false }); // Sort by creation date
 
       if (error) throw error;
-      setMaintenanceRecords(data);
+
+      setMaintenanceRecords(data); // Store the fetched records in state
     } catch (error) {
       console.error("Error fetching maintenance records:", error);
     }
@@ -61,6 +115,7 @@ export default function VehicleDetails({ vehicle }) {
           vehicle_id: id,
           service_description: serviceDescription,
           hash: blockchainHash,
+          author_id: verifiedAuthorId,
         },
       ]);
 
@@ -105,37 +160,41 @@ export default function VehicleDetails({ vehicle }) {
       </p>
 
       {/* Add Maintenance Record Form */}
-      <form onSubmit={handleAddMaintenance} style={{ marginTop: "20px" }}>
-        <h2>Add Maintenance Record</h2>
-        <textarea
-          value={serviceDescription}
-          onChange={(e) => setServiceDescription(e.target.value)}
-          placeholder="Enter service description"
-          required
-          style={{
-            width: "100%",
-            height: "80px",
-            marginBottom: "10px",
-            padding: "10px",
-          }}
-        />
-        <button
-          type="submit"
-          disabled={loading}
-          style={{
-            backgroundColor: loading ? "#ccc" : "#28a745",
-            color: "white",
-            padding: "10px 20px",
-            border: "none",
-            cursor: loading ? "not-allowed" : "pointer",
-          }}
-        >
-          {loading ? "Adding..." : "Add Record"}
-        </button>
-      </form>
+      {verifiedAuthorId && (
+        <form onSubmit={handleAddMaintenance} style={{ marginTop: "20px" }}>
+          <h2>Add Maintenance Record</h2>
+          <textarea
+            value={serviceDescription}
+            onChange={(e) => setServiceDescription(e.target.value)}
+            placeholder="Enter service description"
+            required
+            style={{
+              width: "100%",
+              height: "80px",
+              marginBottom: "10px",
+              padding: "10px",
+            }}
+          />
+
+          <button
+            type="submit"
+            disabled={loading}
+            style={{
+              backgroundColor: loading ? "#ccc" : "#28a745",
+              color: "white",
+              padding: "10px 20px",
+              border: "none",
+              cursor: loading ? "not-allowed" : "pointer",
+            }}
+          >
+            {loading ? "Adding..." : "Add Record"}
+          </button>
+        </form>
+      )}
 
       {/* Maintenance Records */}
       <h2>Maintenance Records</h2>
+
       {maintenanceRecords.length > 0 ? (
         <ul>
           {maintenanceRecords.map((record) => (
@@ -149,6 +208,10 @@ export default function VehicleDetails({ vehicle }) {
               <p>
                 <strong>Added On:</strong>{" "}
                 {new Date(record.created_at).toLocaleString()}
+              </p>
+              <p>
+                <strong>Added By Account:</strong>{" "}
+                {record.verified_authors?.account_name || "Unknown"}
               </p>
               <hr />
             </li>
