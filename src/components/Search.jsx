@@ -5,31 +5,24 @@ export default function Search() {
   const [searchTerm, setSearchTerm] = useState("");
   const router = useRouter();
 
-  /**
-   * Handle submission of the search form.
-   * Redirects to /vehicles with the search term as a query parameter.
-   */
   const handleSearch = (e) => {
     e.preventDefault();
     if (searchTerm.trim()) {
-      router.push(`/vehicles?query=${searchTerm}`);
+      router.push(`/?query=${searchTerm.trim()}`);
     }
   };
 
   return (
-    <div className="container">
-      {/* Search Bar */}
-      <form onSubmit={handleSearch} className="search-container">
+    <div>
+      <h1>Search</h1>
+      <form onSubmit={handleSearch}>
         <input
           type="text"
-          placeholder="Search by VIN or Plates"
+          placeholder="Search by ID, VIN, Plates, Model, or Year"
           value={searchTerm}
           onChange={(e) => setSearchTerm(e.target.value)}
-          className="search-input"
         />
-        <button type="submit" className="search-button">
-          Search
-        </button>
+        <button type="submit">Search</button>
       </form>
     </div>
   );
