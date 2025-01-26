@@ -1,12 +1,12 @@
 use chrono::Utc;
 use near_sdk::serde_json::json;
-use near_workspaces::types::{AccountId, NearToken};
 use near_workspaces::sandbox;
-use tokio::test as tokio_test; // rename for clarity if desired
+use near_workspaces::types::{AccountId, NearToken};
+use tokio::test as tokio_test;
 
-/// Represents the same struct defined in your contract if you want to parse JSON directly.
-/// Adjust the fields to match your MaintenanceRecord.
+/// Local struct matching `MaintenanceRecord` for JSON deserialization in the test.
 #[derive(serde::Deserialize, Debug)]
+#[serde(crate = "near_sdk::serde")]
 pub struct MaintenanceRecord {
     pub date: String,
     pub description: String,
@@ -15,107 +15,82 @@ pub struct MaintenanceRecord {
 }
 
 #[tokio_test]
-async fn test_maintenance_contract() -> Result<(), Box<dyn std::error::Error>> {
-    // 1) Set up sandbox environment
+async fn test_vehicle_maintenance() -> Result<(), Box<dyn std::error::Error>> {
+    // 1) Start local sandbox
+    let now = Utc::now();
     let sandbox = sandbox().await?;
 
-    // 2) Get the "root" account of the sandbox
+    // 2) Root account
     let root = sandbox.root_account()?;
 
-    // 3) Create subaccounts for testing
-    let owner = create_subaccount(&root, "owner").await?;
-    let alice = create_subaccount(&root, "alice").await?;
+    // 3) Create contract subaccount
+    let contract_acc = root
+        .create_subaccount("maintenance-contract")
+        .initial_balance(NearToken::from_near(10))
+        .transact()
+        .await?
+        .unwrap();
 
-    // 4) Compile the contract in the current directory (assuming Cargo.toml in `./`)
+    // 4) Compile the contract from the project root
     let wasm_bytes = near_workspaces::compile_project("./").await?;
-    let contract_account = create_subaccount(&root, "maintenance_contract").await?;
 
-    // 5) Deploy the contract to `maintenance_contract.<root>`
-    let contract = contract_account.deploy(&wasm_bytes).await?.unwrap();
+    // 5) Deploy
+    let contract = contract_acc.deploy(&wasm_bytes).await?.unwrap();
 
-    // 6) Initialize the contract
-    let init_result = contract
-        .call("init")
-        .args_json(json!({
-            "owner": owner.id()
-        }))
+    // 6) Create an owner account
+    let owner_acc = root
+        .create_subaccount("owner")
+        .initial_balance(NearToken::from_near(10))
+        .transact()
+        .await?
+        .unwrap();
+
+    // 7) Init contract with owner
+    let init_res = contract
+        .call("new")
+        .args_json(json!({ "owner": owner_acc.id() }))
         .transact()
         .await?;
-    assert!(init_result.is_success(), "Contract initialization failed");
+    assert!(init_res.is_success(), "Initialization failed.");
 
-    // 7) Add a record (calling from the owner, if your contract requires that)
-    let add_record_result = owner
+    // 8) Another user, e.g. a "mechanic" or just someone who can add a record
+    let alice = root
+        .create_subaccount("alice")
+        .initial_balance(NearToken::from_near(10))
+        .transact()
+        .await?
+        .unwrap();
+
+    // 9) Add a record
+    let add_res = alice
         .call(contract.id(), "add_record")
         .args_json(json!({
             "vehicle_id": "VIN-ABC123",
             "date": "2025-01-25",
-            "description": "Engine check",
+            "description": "Engine tune-up",
             "mechanic_id": "mechanic.testnet",
-            "hash": "sha256-of-enginecheck"
+            "hash": "sha256hash-abc"
         }))
-        .deposit(NearToken::from_near(0)) // no deposit needed unless your logic requires
         .transact()
         .await?;
-    assert!(
-        add_record_result.is_success(),
-        "Failed to add maintenance record"
-    );
+    assert!(add_res.is_success(), "add_record call failed");
 
-    // 8) Retrieve the records to verify
-    let records_view = contract
+    // 10) Retrieve the records
+    let get_call = contract
         .view("get_records")
-        .args_json(json!({
-            "vehicle_id": "VIN-ABC123"
-        }))
+        .args_json(json!({"vehicle_id": "VIN-ABC123"}))
         .await?;
-    // The contract returns Option<Vec<MaintenanceRecord>>, so let's parse it carefully
-    let maybe_records: Option<Vec<MaintenanceRecord>> = records_view.json()?;
+    let maybe_records: Option<Vec<MaintenanceRecord>> = get_call.json()?;
+    assert!(maybe_records.is_some(), "No records found for VIN-ABC123");
 
-    // 9) Assertions on the returned record(s)
-    let records = maybe_records.expect("No records found for VIN-ABC123");
-    assert_eq!(records.len(), 1, "Should have exactly one record");
-
+    let records = maybe_records.unwrap();
+    assert_eq!(records.len(), 1);
     let record = &records[0];
     assert_eq!(record.date, "2025-01-25");
-    assert_eq!(record.description, "Engine check");
+    assert_eq!(record.description, "Engine tune-up");
     assert_eq!(record.mechanic_id.as_str(), "mechanic.testnet");
-    assert_eq!(record.hash, "sha256-of-enginecheck");
+    assert_eq!(record.hash, "sha256hash-abc");
 
-    // 10) (Optional) Test unauthorized usage if your contract has access control
-    // e.g., if your contract requires only the owner can add records,
-    // attempt a record addition from alice and expect failure:
-    /*
-    let unauthorized_result = alice
-        .call(contract.id(), "add_record")
-        .args_json(json!({
-            "vehicle_id": "VIN-XYZ999",
-            "date": "2025-02-01",
-            "description": "Unauthorized check",
-            "mechanic_id": "another_mech.testnet",
-            "hash": "sha256-unauth"
-        }))
-        .deposit(0)
-        .transact()
-        .await?;
-
-    // If there's a require! check, we'd expect unauthorized_result.is_failure()
-    assert!(unauthorized_result.is_failure());
-    */
-
+    println!("Test completed at: {}", now);
     Ok(())
-}
-
-/// Utility for creating subaccounts with initial balances.
-async fn create_subaccount(
-    root: &near_workspaces::Account,
-    name: &str,
-) -> Result<near_workspaces::Account, Box<dyn std::error::Error>> {
-    const TEN_NEAR: NearToken = NearToken::from_near(10);
-    let subaccount = root
-        .create_subaccount(name)
-        .initial_balance(TEN_NEAR)
-        .transact()
-        .await?
-        .unwrap();
-    Ok(subaccount)
 }

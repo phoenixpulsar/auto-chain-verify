@@ -2,3 +2,21 @@ node_modules
 .next
 .env
 .env.local
+
+# Ignore target directory (build artifacts)
+target/
+
+# Ignore lock files (can be recreated by running `cargo build`)
+Cargo.lock
+
+# Ignore temporary files and logs
+*.log
+
+# Ignore editor/IDE files (adjust for your tools, e.g., VSCode, IntelliJ)
+.vscode/
+.idea/
+*.iml
+
+# Ignore NEAR-specific artifacts
+neardev/
+.near-credentials/
